@@ -1,0 +1,29 @@
+DECLARE @CAMINHO NVARCHAR(MAX);
+DECLARE @COMANDO NVARCHAR(MAX);
+DECLARE @foto VARBINARY(max);
+DECLARE @Parametro NVARCHAR(max);
+DECLARE @PATH VARCHAR(MAX);
+
+set @PATH = 'D:\imagens\fotos\';
+
+SET @Parametro = N'@fotoParametro varbinary(max) output';
+
+SELECT
+	   @CAMINHO = @PATH +  REPLACE(F.NOME,' ','_') + '_' + CAST(F.CODIGO AS VARCHAR(10)) + '.jpg'
+  FROM fis F WITH(NOLOCK) 
+ WHERE F.CODIGO = :CODFISICA
+
+SET @COMANDO = N'SELECT @fotoParametro = BulkColumn FROM OPENROWSET(BULK N' + '''' + @CAMINHO + '''' + ' , SINGLE_BLOB) Load'
+
+BEGIN TRY
+
+EXEC sp_executesql @COMANDO, @Parametro, @fotoParametro = @foto OUTPUT;
+
+END TRY
+BEGIN CATCH
+
+set @foto = NULL
+
+END CATCH
+
+SELECT @foto AS FOTO
