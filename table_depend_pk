@@ -1,0 +1,14 @@
+SELECT 
+    OBJECT_SCHEMA_NAME(fkc.parent_object_id) AS Esquema_FK,
+    OBJECT_NAME(fkc.parent_object_id) AS Tabela_FK,
+    COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS Coluna_FK,
+    OBJECT_SCHEMA_NAME(fkc.referenced_object_id) AS Esquema_PK,
+    OBJECT_NAME(fkc.referenced_object_id) AS Tabela_PK,
+    COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) AS Coluna_PK,
+    fk.name AS Nome_FK
+FROM sys.foreign_key_columns fkc
+INNER JOIN sys.foreign_keys fk ON fkc.constraint_object_id = fk.object_id
+WHERE 
+    OBJECT_NAME(fkc.referenced_object_id) = 'planocontas'
+    AND OBJECT_SCHEMA_NAME(fkc.referenced_object_id) = 'sophia'
+    AND COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) IN ('codigo', 'conta_contabil');
