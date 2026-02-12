@@ -1,0 +1,79 @@
+DECLARE @VENCIMENTO DATE, @IDFK_TITULAR INT, @IDFK_RESPONSAVEL INT, @SITUACAO INT, @ID_LANCAMENTO INT, @ValorTotaBruto numeric(15,4), @ValorTotaDesconto NUMERIC(15,4),
+@ValorTotalLiquido NUMERIC(15,4), @ValorBaseCaluloISS NUMERIC(15,4), @ValorTotal NUMERIC(15,4), @IDFK_PROPRIETARIO int, @CPF_Tomador VARCHAR(20),
+@Descricao varchar(999), @Email VARCHAR(999),@ID_NOTA_FISCAL_SERVICO INT,@IDFK_ALUNO INT
+
+select 
+       l.VENCIMENTO
+       ,l.IDFK_TITULAR
+       ,l.IDFK_ALUNO
+       ,l.IDFK_RESPONSAVEL
+       ,l.SITUACAO
+       ,l.ID_LANCAMENTO
+       ,valor.VALOR as ValorTotaBruto
+       ,coalesce(li.VALOR,0) as ValorTotaDesconto
+       ,valor.VALOR as ValorTotalLiquido
+       ,valor.VALOR as ValorBaseCaluloISS
+       ,valor.VALOR as ValorTotal
+       ,l.IDFK_PROPRIETARIO
+       ,r.CPF as CPF_Tomador
+       ,l.DESCRICAO + ' - ' + p.nome + ' Valores: Valor líquido: R$ ' + replace(cast(cast(valor.VALOR as numeric(15,2)) as varchar(50)),'.',',') + '!CHR13!' as Descricao
+       ,e.CONTATO as Email
+       into tempLancamento
+  from sophia.lanc l
+ inner join sophia.lanci valor on valor.IDFK_LANCAMENTO = l.ID_LANCAMENTO and valor.TIPO = 1
+ inner join sophia.PESSOA r on r.ID_PESSOA = l.IDFK_RESPONSAVEL
+ inner join sophia.PESSOA p on p.ID_PESSOA = l.IDFK_ALUNO
+  left join sophia.lacim li on li.IDFK_LANCAMENTO = l.ID_LANCAMENTO and li.DESCRICAO = 'Migração Desc.'
+  left join sophia.conts e on e.IDFK_PESSOA = r.ID_PESSOA and IDFK_FORMA_CONTATO = 3
+ where l.VENCIMENTO > '20241231'
+   and l.CODIGO_ORIGEM is not null
+   and l.ID_LANCAMENTO not in (select IDFK_LANCAMENTO from sophia.NOTA_FISCAL_SERVICO_ITEM)
+
+-- Declaração do cursor
+DECLARE cursor_lancamento CURSOR FOR
+select * from tempLancamento
+
+-- Abrindo o cursor
+OPEN cursor_lancamento
+
+-- Buscando a primeira linha do cursor
+FETCH NEXT FROM cursor_lancamento INTO        
+       @VENCIMENTO,@IDFK_TITULAR,@IDFK_ALUNO,@IDFK_RESPONSAVEL,@SITUACAO,@ID_LANCAMENTO,@ValorTotaBruto,@ValorTotaDesconto,@ValorTotalLiquido
+       ,@ValorBaseCaluloISS,@ValorTotal,@IDFK_PROPRIETARIO,@CPF_Tomador,@Descricao,@Email
+
+-- Loop para percorrer os registros
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Inserindo na tabela PESSOA_CONTATO
+    INSERT INTO sophia.nfs 
+    (DATA_COMPETENCIA,DATA_GERACAO,IDFK_TITULAR,IDFK_TOMADOR,SITUACAO,VALOR_TOTAL_BRUTO,VALOR_TOTAL_DESCONTO
+    ,VALOR_TOTAL_LIQUIDO,VALOR_BASE_CALCULO_ISS,VALOR_TOTAL,IDFK_PROPRIETARIO,CPF_TOMADOR,AMBIENTE,DESCRICAO
+    ,TIPO_ARREDONDAMENTO,EMAIL_TOMADOR)
+    VALUES (@VENCIMENTO,@VENCIMENTO,@IDFK_TITULAR,@IDFK_RESPONSAVEL,3,@ValorTotaBruto,@ValorTotaDesconto
+    ,@ValorTotalLiquido,@ValorBaseCaluloISS,@ValorTotal,@IDFK_PROPRIETARIO,@CPF_Tomador,1,@Descricao
+    ,0,@Email)
+    
+    -- Recebe o ID_NOTA_FISCAL_SERVICO
+    select @ID_NOTA_FISCAL_SERVICO = SCOPE_IDENTITY()
+
+    -- Inserindo na tabela nfsh
+    INSERT INTO SOPHIA.nfsh (IDFK_NOTA_FISCAL_SERVICO,DATA,ACAO)
+    VALUES (@ID_NOTA_FISCAL_SERVICO,@VENCIMENTO,'Geração do registro a partir do lançamento 112276'+ CAST(@ID_LANCAMENTO as varchar(50)) +'.')
+
+    -- Inserindo na tabela nfsi
+    INSERT INTO SOPHIA.NOTA_FISCAL_SERVICO_ITEM (IDFK_NOTA_FISCAL_SERVICO,IDFK_ALUNO,DESCRICAO,QUANTIDADE,VALOR_UNITARIO,VALOR_TOTAL,VALOR_DESCONTO
+                                                 ,VALOR_BASE_CALCULO_ISS,IDFK_LANCAMENTO,DATA_VENDA)
+    VALUES (@ID_NOTA_FISCAL_SERVICO,@IDFK_ALUNO,@Descricao,1,@ValorTotaBruto,@ValorTotal,@ValorTotaDesconto,@ValorBaseCaluloISS,@ID_LANCAMENTO,'0001-01-01')
+
+    -- Buscando o próximo registro
+    FETCH NEXT FROM cursor_lancamento INTO        
+       @VENCIMENTO,@IDFK_TITULAR,@IDFK_ALUNO,@IDFK_RESPONSAVEL,@SITUACAO,@ID_LANCAMENTO,@ValorTotaBruto,@ValorTotaDesconto,@ValorTotalLiquido
+       ,@ValorBaseCaluloISS,@ValorTotal,@IDFK_PROPRIETARIO,@CPF_Tomador,@Descricao,@Email
+END
+
+-- Fechar e desalocar o cursor
+CLOSE cursor_lancamento
+DEALLOCATE cursor_lancamento
+
+-- Destroi a tabela tempLancamento
+drop table dbo.tempLancamento
