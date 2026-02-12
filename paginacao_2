@@ -1,0 +1,84 @@
+SELECT 
+      NOME
+      ,NUM_CHAMADA
+      ,RG
+      ,CODEXT
+      ,COD_MATRICULA
+      ,PAGINA AS PAG_ALUNO
+      ,CODIGO_TURMA
+      ,SITUACAO
+      ,TIPO
+      ,DATA
+      ,[1]  AS N1
+      ,[2]  AS N2
+      ,[3]  AS N3
+      ,[4]  AS N4
+      ,[5]  AS N5
+      ,[6]  AS N6
+      ,[7]  AS N7
+      ,[8]  AS N8
+      ,[9]  AS N9
+      ,[10] AS N10
+      ,[11] AS N11
+      ,[12] AS N12
+      ,[13] AS N13
+      ,[14] AS N14
+      ,[15] AS N15
+      ,[16] AS N16
+ FROM (
+       SELECT 
+              F.NOME
+              ,AC.NUM_CHAMADA
+              ,F.RG
+              ,F.CODEXT
+              ,AC.MEDIA_FINALSTR
+              ,M.CODIGO AS COD_MATRICULA
+              ,T.PAGINA
+              ,ROW_NUMBER()OVER(PARTITION BY M.CODIGO,T.PAGINA ORDER BY  T.ORDEM_DISCIPLINAS) AS ORDEM_DISCIPLINAS
+              ,T.COD_TURMA AS CODIGO_TURMA
+              ,ATT.SITUACAO
+              ,AC.TIPO
+              ,COALESCE((SELECT TOP 1 DATA FROM CANCEL C WITH(NOLOCK) WHERE C.MATRICULA = M.CODIGO),
+                        AC.DATA) AS DATA
+              
+         FROM #TEMP_TURMAS T WITH(NOLOCK)
+        OUTER APPLY(SELECT * 
+                      FROM (SELECT 
+                                   MATRICULA
+                                   ,NUM_CHAMADA
+                                   ,TURMA
+                                   ,TIPO
+                                   ,NULL AS MEDIA_FINALSTR
+                                   ,NULL AS DISCIPLINA
+                                   ,MOV.[DATA]
+                              FROM MOVER MOV WITH(NOLOCK)
+                             WHERE MOV.TURMA = T.COD_TURMA
+                             
+                             UNION
+                            
+                            SELECT 
+                                   MATRICULA
+                                   ,NUM_CHAMADA
+                                   ,TURMA
+                                   ,NULL AS TIPO
+                                   ,AC.MEDIA_FINALSTR
+                                   ,AC.DISCIPLINA
+                                   ,NULL AS DATA
+                              FROM ACAD AC WITH(NOLOCK)
+                             WHERE AC.TURMA = T.COD_TURMA
+                            )A
+                      WHERE COALESCE(A.DISCIPLINA,T.COD_DISCIPLINA) = T.COD_DISCIPLINA
+                    ) AC
+        OUTER APPLY (SELECT SITUACAO 
+                       FROM ALUNOS_TURMA(T.COD_TURMA,1,'') AT 
+                      WHERE AT.MATRICULA = AC.MATRICULA 
+                        AND AT.COD_DISP = T.COD_DISCIPLINA) ATT
+        INNER JOIN MAT M WITH(NOLOCK) 
+           ON M.CODIGO = AC.MATRICULA
+        INNER JOIN CLIENTE F WITH(NOLOCK)
+           ON F.CODIGO = M.FISICA
+      )AX
+PIVOT (MAX(MEDIA_FINALSTR)
+      FOR ORDEM_DISCIPLINAS IN ([1],[2],[3],[4],[5],[6],[7],[8],[9],[10],[11],[12],[13],[14],[15],[16]))BX
+WHERE PAGINA = 1 AND CODIGO_TURMA = 35
+ORDER BY PAGINA,NUM_CHAMADA
