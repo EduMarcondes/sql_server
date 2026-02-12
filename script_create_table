@@ -1,0 +1,28 @@
+/* COMANDO PARA GERAR SCRIPT CREATE DE TODAS AS TABELAS DE UM BANCO DE DADOS */
+DECLARE @SQL NVARCHAR(MAX) = '';
+
+SELECT @SQL = @SQL + 
+    'CREATE TABLE [' + s.name + '].[' + t.name + '] (' + CHAR(10) +
+    STRING_AGG(
+        '    [' + c.name + '] ' + 
+        CASE 
+            WHEN ty.name IN ('char', 'varchar', 'nchar', 'nvarchar') 
+            THEN ty.name + '(' + 
+                CASE WHEN c.max_length = -1 THEN 'MAX' ELSE CAST(c.max_length AS VARCHAR) END + ')'
+            WHEN ty.name IN ('decimal', 'numeric') 
+            THEN ty.name + '(' + CAST(c.precision AS VARCHAR) + ', ' + CAST(c.scale AS VARCHAR) + ')'
+            ELSE ty.name
+        END + 
+        CASE WHEN c.is_nullable = 1 THEN ' NULL' ELSE ' NOT NULL' END, 
+        ',' + CHAR(10)
+    ) WITHIN GROUP (ORDER BY c.column_id) + 
+    CHAR(10) + ');' + CHAR(10) + CHAR(10)
+FROM sys.tables t
+JOIN sys.schemas s ON t.schema_id = s.schema_id
+JOIN sys.columns c ON t.object_id = c.object_id
+JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+GROUP BY s.name, t.name
+ORDER BY s.name, t.name;
+
+-- Em vez de PRINT, use SELECT para capturar tudo
+SELECT @SQL AS ScriptGerado;
