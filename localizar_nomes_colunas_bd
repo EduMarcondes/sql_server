@@ -1,0 +1,5 @@
+SELECT DISTINCT t.name AS 'Tabela'
+FROM sys.tables t
+INNER JOIN sys.columns c ON t.object_id = c.object_id
+WHERE c.name = 'idctritm' -- Nome da coluna a ser pesquisada
+ORDER BY t.name
