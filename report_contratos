@@ -1,0 +1,210 @@
+DECLARE  
+     @PRE_MATRICULA INT 
+     ,@VENDA INT
+     
+SET @PRE_MATRICULA = :CODIGO_PRE
+SET @VENDA = COALESCE(:CODIGO_VENDA,0)
+
+--==========================================================================================
+-- TRAZ AS PARCELAS DE MATRICULA E MENSALIDADE DO CURSO NOS VALORES BRUTO
+--==========================================================================================
+    SELECT ROW_NUMBER()OVER(ORDER BY A.ITEM DESC,PARCELA) AS ORDEM
+           ,A.*
+           INTO #VENDA_CURSO_BASE
+      FROM (
+            SELECT 
+                PMI.item            AS ITEM
+                ,PMI.forma_pgto     AS FORMA_PGTO
+                ,PMI.vcto_1         AS VCTO1
+                ,PMI.dia_vcto       AS DIA_VCTO
+                ,PMI.dia_vcto_util  AS DIA_VCTO_UTIL
+                ,PMV.numero         AS PARCELA
+                ,PMV.valor          AS VALOR
+                ,@PRE_MATRICULA     AS PRE_MATRICULA
+                ,@VENDA             AS VENDA
+            FROM pmi PMI WITH(NOLOCK)
+            INNER JOIN pmiv PMV WITH(NOLOCK)
+                ON PMV.pre_matricula = PMI.pre_matricula
+               AND PMV.pre_matricula_item = PMI.item
+            WHERE PMI.PRE_MATRICULA = @PRE_MATRICULA
+               AND @VENDA = 0
+
+            UNION ALL
+
+            SELECT 
+                I.ITEM
+                ,P.PLANO_PGTO_COND AS FORMA_PGTO
+                ,I.VCTO1
+                ,I.DIA_VCTO
+                ,I.DIA_UTIL     AS DIA_VCTO_UTIL
+                ,P.NUMERO       AS PARCELA
+                ,P.VALOR
+                ,@PRE_MATRICULA AS PRE_MATRICULA
+                ,@VENDA         AS VENDA
+            FROM vv V WITH(NOLOCK) 
+            INNER JOIN ISS I WITH(NOLOCK)
+                ON I.VENDA = V.CODIGO
+            INNER JOIN PGP P WITH(NOLOCK)
+                ON P.PLANO_PGTO_COND = I.cond_pgto
+            WHERE V.CODIGO = @VENDA
+      )A
+    WHERE @VENDA > 0 OR @PRE_MATRICULA IS NOT NULL
+
+--==========================================================================================
+-- CALCULA O VALOR BRUTO DA ANUIDADE DO CURSO
+--==========================================================================================
+SELECT *
+       ,(SELECT SUM(VALOR) FROM #VENDA_CURSO_BASE WITH(NOLOCK)) AS ANUIDADE_BRUTO
+       ,(SELECT COUNT(PARCELA) FROM #VENDA_CURSO_BASE WITH(NOLOCK)) AS QTD_PARC_CURSO
+       ,(SELECT COUNT(PARCELA) FROM #VENDA_CURSO_BASE WITH(NOLOCK) WHERE ITEM = 1) AS QTD_PARC_MENS
+       ,(SELECT COUNT(PARCELA) FROM #VENDA_CURSO_BASE WITH(NOLOCK) WHERE ITEM = 2) AS QTD_PARC_MAT
+       INTO #VENDA_CURSO
+  FROM #VENDA_CURSO_BASE WITH(NOLOCK)
+
+--==========================================================================================
+-- TRAZ OS DESCONTOS CONCEDIDOS NA VENDA
+--==========================================================================================
+    SELECT 
+           HD.VALOR,
+           MOT.APLICARDESC,
+           MOT.VALIDO_MATRICULA,
+           MOT.VALIDO_MENSALIDADE_PARC,
+           MOT.TIPO_VAL_DESC
+           INTO #DESCONTOS
+    FROM HDS HD WITH(NOLOCK)
+    INNER JOIN MOTV MOT WITH(NOLOCK) ON MOT.CODIGO = HD.MOTIVO_DESCONTO
+    WHERE (HD.VENDA = @VENDA OR HD.PRE_MATRICULA = @PRE_MATRICULA)
+      AND HD.ATIVO = 1
+
+--==========================================================================================
+-- APLICA OS DESCONTOS NAS PARCELAS E VALOR BRUTO DO CURSO
+--==========================================================================================
+SELECT 
+       V.* 
+
+       ,CASE 
+            WHEN D.APLICARDESC = 0 AND D.TIPO_VAL_DESC = 1 AND V.ITEM = 2 AND D.VALIDO_MATRICULA = 1
+                THEN V.VALOR * (1 - D.VALOR/100.0)
+
+            WHEN D.APLICARDESC = 0 AND D.TIPO_VAL_DESC = 0 AND V.ITEM = 2 AND D.VALIDO_MATRICULA = 1
+                THEN V.VALOR - D.VALOR
+
+            WHEN D.APLICARDESC = 0 AND D.TIPO_VAL_DESC = 1 AND V.ITEM = 1 AND D.VALIDO_MENSALIDADE_PARC = 1
+                THEN V.VALOR * (1 - D.VALOR/100.0)
+
+            WHEN D.APLICARDESC = 0 AND D.TIPO_VAL_DESC = 0 AND V.ITEM = 1 AND D.VALIDO_MENSALIDADE_PARC = 1
+                THEN V.VALOR - D.VALOR
+
+            WHEN D.APLICARDESC = 0 AND D.TIPO_VAL_DESC = 2 AND V.ITEM = 2 AND D.VALIDO_MATRICULA = 1
+                THEN V.VALOR - (D.VALOR / V.QTD_PARC_MAT)
+
+            WHEN D.APLICARDESC = 0 AND D.TIPO_VAL_DESC = 2 AND V.ITEM = 1 AND D.VALIDO_MENSALIDADE_PARC = 1
+                THEN V.VALOR - (D.VALOR / V.QTD_PARC_MENS)
+
+            WHEN D.APLICARDESC = 0 AND D.TIPO_VAL_DESC <> 2
+                AND ((V.ITEM = 2 AND D.VALIDO_MATRICULA = 1) OR (V.ITEM = 1 AND D.VALIDO_MENSALIDADE_PARC = 1))
+                    THEN D.VALOR
+
+               ELSE V.VALOR
+        END AS LIQUIDO_PARCELA
+
+        ,CASE 
+            WHEN D.APLICARDESC = 0 AND D.TIPO_VAL_DESC = 1 
+                AND ((V.ITEM = 2 AND D.VALIDO_MATRICULA = 1) OR (V.ITEM = 1 AND D.VALIDO_MENSALIDADE_PARC = 1))
+                        THEN V.VALOR * (D.VALOR/100.0)
+
+            WHEN D.APLICARDESC = 0 AND D.TIPO_VAL_DESC = 2 
+                AND ((V.ITEM = 2 AND D.VALIDO_MATRICULA = 0) OR (V.ITEM = 1 AND D.VALIDO_MENSALIDADE_PARC = 1))
+                    THEN D.VALOR
+
+            WHEN D.APLICARDESC = 0 AND D.TIPO_VAL_DESC = 0 
+                AND ((V.ITEM = 2 AND D.VALIDO_MATRICULA = 0) OR (V.ITEM = 1 AND D.VALIDO_MENSALIDADE_PARC = 1))
+                    THEN D.VALOR
+
+        END AS DESCONTO
+
+       INTO #VENDA_CURSO_DESC
+  FROM #VENDA_CURSO V WITH(NOLOCK)
+ OUTER APPLY (SELECT TOP 1 * FROM #DESCONTOS) D
+
+--==========================================================================================
+-- VALORES TOTAIS DO CURSO
+--==========================================================================================
+SELECT 
+       V.*
+       ,(SELECT SUM(LIQUIDO_PARCELA) FROM #VENDA_CURSO_DESC) AS ANUIDADE_LIQUIDO
+       ,(SELECT SUM(LIQUIDO_PARCELA) FROM #VENDA_CURSO_DESC WHERE ITEM = 2) AS ANUIDADE_LIQ_MAT
+       ,(SELECT SUM(LIQUIDO_PARCELA) FROM #VENDA_CURSO_DESC WHERE ITEM = 1) AS ANUIDADE_LIQ_MENS
+
+       INTO #TOTAIS
+  FROM #VENDA_CURSO_DESC V WITH(NOLOCK)
+
+--==========================================================================================
+-- DESCRITIVOS BRUTO
+--==========================================================================================
+SELECT 
+       VALOR,
+       COUNT(*) AS QTD,
+       MIN(ORDEM) AS ORDEM_MIN
+
+       INTO #DESCRITIVO_BASE_BRUTO
+  FROM #VENDA_CURSO_DESC
+ GROUP BY VALOR
+
+--==========================================================================================
+-- MONTA O DESCRITIVOS BRUTO
+--==========================================================================================
+    SELECT 
+        STRING_AGG(
+            CASE 
+                WHEN QTD = 1 
+                     THEN CAST(QTD AS varchar) + ' parcela de R$ ' + FORMAT(VALOR,'N2','pt-BR')
+                     ELSE CAST(QTD AS varchar) + ' parcelas iguais de R$ ' + FORMAT(VALOR,'N2','pt-BR') + ' cada'
+            END, ', mais '
+        ) WITHIN GROUP (ORDER BY ORDEM_MIN) AS ANUIDADE_TOTAL_BRUTO_DESCRITIVO
+          INTO #DESCRITIVOS_BRUTO
+    FROM #DESCRITIVO_BASE_BRUTO
+
+--==========================================================================================
+-- DESCRITIVOS LÍQUIDO
+--==========================================================================================
+    SELECT 
+        LIQUIDO_PARCELA,
+        COUNT(*) AS QTD,
+        MIN(ORDEM) AS ORDEM_MIN
+        INTO #DESCRITIVO_BASE_LIQUIDO
+    FROM #VENDA_CURSO_DESC
+    GROUP BY LIQUIDO_PARCELA
+
+    SELECT 
+        STRING_AGG(
+            CASE 
+                WHEN QTD = 1 
+                     THEN CAST(QTD AS varchar) + ' parcela de R$ ' + FORMAT(LIQUIDO_PARCELA,'N2','pt-BR')
+                     ELSE CAST(QTD AS varchar) + ' parcelas iguais de R$ ' + FORMAT(LIQUIDO_PARCELA,'N2','pt-BR') + ' cada'
+            END, ', mais '
+        ) WITHIN GROUP (ORDER BY ORDEM_MIN) AS ANUIDADE_TOTAL_LIQ_DESCRITIVO
+        
+        INTO #DESCRITIVOS_LIQUIDO
+    FROM #DESCRITIVO_BASE_LIQUIDO
+
+
+SELECT TOP 1
+       T.*
+       ,SOPHIA.EXTENSO(T.ANUIDADE_BRUTO) AS ANUIDADE_BRUTO_EXT
+       ,SOPHIA.EXTENSO(T.ANUIDADE_LIQUIDO) AS ANUIDADE_LIQUIDO_EXT
+       ,DBR.ANUIDADE_TOTAL_BRUTO_DESCRITIVO
+       ,DLQ.ANUIDADE_TOTAL_LIQ_DESCRITIVO
+       ,B.PARCELA1_VALOR - COALESCE(T.DESCONTO,0) AS PARCELA1_VALOR
+       ,SOPHIA.EXTENSO(B.PARCELA1_VALOR - COALESCE(T.DESCONTO,0)) AS PARCELA1_VALOR_EXT
+       ,C.QTD_PARCELAS
+       ,T.DESCONTO * -1 AS DESCONTO_NEGATIVO
+       ,SOPHIA.numeroTexto(C.QTD_PARCELAS) AS QTD_PARCELAS_EXT
+       ,(T.DESCONTO * C.QTD_PARCELAS) * -1 AS ANUIDADE_DESCONTO
+       ,(SELECT TOP 1 DIA_VCTO FROM #TOTAIS ORDER BY ORDEM DESC) AS DIA_VCTO_MESALIDADE
+       ,T.ANUIDADE_LIQ_MAT + T.ANUIDADE_LIQ_MENS AS ANUIDADE_LIQ
+FROM #TOTAIS T
+OUTER APPLY (SELECT TOP 1 VALOR AS PARCELA1_VALOR, DIA_VCTO AS PARCELA1_DIA_VCTO FROM #TOTAIS WHERE ITEM=1 AND PARCELA = 1) B
+OUTER APPLY (SELECT MAX(ORDEM) AS QTD_PARCELAS FROM #TOTAIS) C
+LEFT JOIN #DESCRITIVOS_BRUTO DBR ON 1 = 1
+LEFT JOIN #DESCRITIVOS_LIQUIDO DLQ ON 1 = 1
